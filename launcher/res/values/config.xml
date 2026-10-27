@@ -15,13 +15,25 @@
         <item>org.videolan.vlc</item>
     </string-array>
 
-    <!-- Never shown as tiles: system helpers, and the Live TV app (it's in the Inputs menu). -->
+    <!-- Never shown as tiles: system helpers, bloatware, and Live TV. -->
     <string-array name="hidden_apps">
+        <item>com.mitv.tvhome.atv</item>
+        <item>com.xiaomi.mitv.handbook</item>
+        <item>com.mitv.gallery</item>
+        <item>com.mitv.dream</item>
+        <item>com.xiaomi.mitv.mediaexplorer</item>
+        <item>com.xiaomi.mitv.smartshare</item>
+        <item>com.xiaomi.mitv.tvmanager</item>
+        <item>com.google.android.play.games</item>
+        <item>com.google.android.videos</item>
+        <item>com.android.tv</item>
         <item>com.tcl.tv</item>
         <item>com.tcl.suspension</item>
         <item>com.tcl.t_solo</item>
         <item>com.tcl.dashboard</item>
     </string-array>
+
+    <string name="accessibility_desc">tv-home remote shortcut handler</string>
 
     <!-- The TV's Live TV / tuner app, listed last in the Inputs menu. Empty to leave it out.
          Common ones: com.tcl.tv (TCL), com.mediatek.wwtv.tvcenter (Xiaomi, many MediaTek sets),

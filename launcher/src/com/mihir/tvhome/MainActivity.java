@@ -3,6 +3,9 @@ package com.mihir.tvhome;
 import android.animation.ArgbEvaluator;
 import android.animation.ValueAnimator;
 import android.app.Activity;
+import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothClass;
+import android.bluetooth.BluetoothDevice;
 import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.Context;
@@ -33,6 +36,29 @@ import android.net.wifi.WifiManager;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
+import android.provider.Settings;
+import android.util.TypedValue;
+import android.view.Gravity;
+import android.view.KeyEvent;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.ViewOutlineProvider;
+import android.view.animation.DecelerateInterpolator;
+import android.view.animation.OvershootInterpolator;
+import android.widget.FrameLayout;
+import android.widget.ImageView;
+import android.widget.LinearLayout;
+import android.widget.PopupWindow;
+import android.widget.TextView;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import android.os.SystemClock;
 import android.provider.Settings;
 import android.util.TypedValue;
@@ -101,12 +127,15 @@ public class MainActivity extends Activity {
     private final Runnable rotateWallpaper = this::nextWallpaper;
     static final long WALLPAPER_INTERVAL_MS = 10 * 60 * 1000;
     private TextView greeting, clock, ampm, date, title, wifiPill, appsLabel;
+    private TextView weatherPill, btPill;
+    private View weatherTint, blackoutView;
+    private int currentWeatherTint = 0;
     private int glowColor = 0xFF3A3A3A;
     private ValueAnimator glowAnim;
     private int lastFocusedId = View.NO_ID;
     private boolean firstShow = true;
     private int packageSeq;
-    private PopupWindow inputsPopup;
+    private PopupWindow inputsPopup, sleepPopup;
 
     private final BroadcastReceiver tick = new BroadcastReceiver() {
         @Override public void onReceive(Context c, Intent i) { updateClock(); updateWifi(); }
@@ -150,6 +179,8 @@ public class MainActivity extends Activity {
         registerReceiver(tick, tf);
         updateClock();
         updateWifi();
+        updateBluetooth();
+        updateWeather();
         View last = lastFocusedId == View.NO_ID ? null : findViewById(lastFocusedId);
         if (last == null && !dockCards.isEmpty()) last = dockCards.get(0);
         if (last != null) last.requestFocus();
@@ -167,6 +198,7 @@ public class MainActivity extends Activity {
         handler.removeCallbacks(rotateWallpaper);
         unregisterReceiver(tick);
         if (inputsPopup != null) inputsPopup.dismiss();
+        if (sleepPopup != null) sleepPopup.dismiss();
     }
 
     @Override
@@ -178,8 +210,13 @@ public class MainActivity extends Activity {
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
-        // Home pressed while already home: jump back to the first dock app.
         if (inputsPopup != null) inputsPopup.dismiss();
+        if (sleepPopup != null) sleepPopup.dismiss();
+        if (intent != null && KeyRemapService.ACTION_LAUNCH_HDMI.equals(intent.getAction())) {
+            launchConnectedHdmi(null);
+            return;
+        }
+        // Home pressed while already home: jump back to the first dock app.
         if (!dockCards.isEmpty()) dockCards.get(0).requestFocus();
         scroll.smoothScrollTo(0, 0);
     }
@@ -206,6 +243,10 @@ public class MainActivity extends Activity {
         scrim.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
                 new int[]{0xB3000000, 0x40000000, 0x26000000, 0x8C000000, 0xE6000000}));
         root.addView(scrim, new FrameLayout.LayoutParams(-1, -1));
+
+        weatherTint = new View(this);
+        weatherTint.setBackgroundColor(Color.TRANSPARENT);
+        root.addView(weatherTint, new FrameLayout.LayoutParams(-1, -1));
         gridShade = new View(this);
         gridShade.setBackgroundColor(0xB3000000);
         gridShade.setAlpha(0f);
@@ -273,6 +314,13 @@ public class MainActivity extends Activity {
         grid.setClipChildren(false);
         grid.setClipToPadding(false);
         content.addView(grid, llp(-1, -2, dp(68), 0, dp(68), dp(160)));
+
+        blackoutView = new View(this);
+        blackoutView.setBackgroundColor(Color.BLACK);
+        blackoutView.setVisibility(View.GONE);
+        blackoutView.setFocusable(true);
+        blackoutView.setClickable(true);
+        root.addView(blackoutView, new FrameLayout.LayoutParams(-1, -1));
         return root;
     }
 
@@ -282,11 +330,29 @@ public class MainActivity extends Activity {
 
         LinearLayout left = new LinearLayout(this);
         left.setOrientation(LinearLayout.VERTICAL);
+
+        LinearLayout greetingRow = new LinearLayout(this);
+        greetingRow.setOrientation(LinearLayout.HORIZONTAL);
+        greetingRow.setGravity(Gravity.CENTER_VERTICAL);
         greeting = text(10, "sans-serif-medium", 0xB3FFFFFF);
         greeting.setLetterSpacing(0.25f);
         greeting.setSingleLine(true);
-        greeting.setPadding(0, 0, dp(16), 0);
-        left.addView(greeting);
+        greetingRow.addView(greeting);
+
+        weatherPill = text(10, "sans-serif-medium", 0xE6FFFFFF);
+        weatherPill.setLetterSpacing(0.18f);
+        weatherPill.setSingleLine(true);
+        weatherPill.setPadding(dp(10), dp(3), dp(10), dp(3));
+        GradientDrawable wbg = new GradientDrawable();
+        wbg.setCornerRadius(dp(10));
+        wbg.setColor(0x33000000);
+        wbg.setStroke(dp(1), 0x22FFFFFF);
+        weatherPill.setBackground(wbg);
+        weatherPill.setText("☀️  ...");
+        weatherPill.setFocusable(true);
+        weatherPill.setOnClickListener(v -> updateWeather());
+        greetingRow.addView(weatherPill, llp(-2, -2, dp(12), 0, 0, 0));
+        left.addView(greetingRow);
 
         LinearLayout clockRow = new LinearLayout(this);
         clockRow.setGravity(Gravity.BOTTOM);
@@ -303,18 +369,28 @@ public class MainActivity extends Activity {
         date.setLetterSpacing(0.22f);
         left.addView(date);
         for (TextView t : new TextView[]{greeting, clock, ampm, date}) t.setShadowLayer(dp(10), 0, dp(1), 0xB3000000);
-        header.addView(left, new FrameLayout.LayoutParams(dp(420), -2, Gravity.START | Gravity.TOP));
+        header.addView(left, new FrameLayout.LayoutParams(dp(480), -2, Gravity.START | Gravity.TOP));
 
         LinearLayout right = new LinearLayout(this);
         right.setGravity(Gravity.CENTER_VERTICAL);
         right.setClipChildren(false);
+
         TextView inputs = pill("Inputs", "⇥");
         inputs.setOnClickListener(v -> showInputs(v));
+
+        btPill = pill("Bluetooth", "🎧");
+        btPill.setOnClickListener(v -> handleBluetoothClick());
+
         wifiPill = pill("Wi-Fi", "◉");
         wifiPill.setOnClickListener(v -> launch(new Intent(Settings.ACTION_WIFI_SETTINGS)));
+
+        TextView sleepPill = pill("Sleep", "☾");
+        sleepPill.setOnClickListener(v -> showSleepDialog(v));
+
         TextView settings = pill("Settings", "⚙");
         settings.setOnClickListener(v -> launch(new Intent(Settings.ACTION_SETTINGS)));
-        for (TextView p : new TextView[]{inputs, wifiPill, settings}) {
+
+        for (TextView p : new TextView[]{inputs, btPill, wifiPill, sleepPill, settings}) {
             right.addView(p, llp(-2, dp(30), dp(10), 0, 0, 0));
             pills.add(p);
         }
@@ -1004,12 +1080,188 @@ public class MainActivity extends Activity {
 
     @Override
     public boolean dispatchKeyEvent(KeyEvent e) {
-        // Menu key on the remote opens the Inputs dropdown.
-        if (e.getKeyCode() == KeyEvent.KEYCODE_MENU && e.getAction() == KeyEvent.ACTION_UP && !pills.isEmpty()) {
-            showInputs(pills.get(0));
+        if (blackoutView != null && blackoutView.getVisibility() == View.VISIBLE) {
+            if (e.getAction() == KeyEvent.ACTION_UP) {
+                blackoutView.setVisibility(View.GONE);
+                View last = lastFocusedId == View.NO_ID ? null : findViewById(lastFocusedId);
+                if (last != null) last.requestFocus();
+            }
             return true;
         }
+        if (e.getAction() == KeyEvent.ACTION_UP) {
+            int code = e.getKeyCode();
+            if (code == KeyEvent.KEYCODE_MENU && !pills.isEmpty()) {
+                showInputs(pills.get(0));
+                return true;
+            }
+            if (code == KeyEvent.KEYCODE_BUTTON_2 || code == KeyEvent.KEYCODE_PROG_RED) {
+                launchConnectedHdmi(null);
+                return true;
+            }
+        }
         return super.dispatchKeyEvent(e);
+    }
+
+    // ---------------------------------------------------------------- weather & bluetooth & sleep
+
+    private void updateWeather() {
+        new Thread(() -> {
+            try {
+                URL url = new URL("https://wttr.in/?format=j1");
+                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                conn.setRequestProperty("User-Agent", "curl/7.68.0");
+                conn.setConnectTimeout(6000);
+                conn.setReadTimeout(6000);
+                if (conn.getResponseCode() == 200) {
+                    BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+                    StringBuilder sb = new StringBuilder();
+                    String line;
+                    while ((line = reader.readLine()) != null) sb.append(line);
+                    reader.close();
+
+                    JSONObject json = new JSONObject(sb.toString());
+                    JSONArray arr = json.optJSONArray("current_condition");
+                    if (arr != null && arr.length() > 0) {
+                        JSONObject cur = arr.getJSONObject(0);
+                        String temp = cur.optString("temp_C", "--");
+                        String desc = "Clear";
+                        JSONArray descArr = cur.optJSONArray("weatherDesc");
+                        if (descArr != null && descArr.length() > 0) {
+                            desc = descArr.getJSONObject(0).optString("value", "Clear");
+                        }
+                        int code = cur.optInt("weatherCode", 113);
+                        final String finalDesc = desc;
+                        runOnUiThread(() -> applyWeather(temp, finalDesc, code));
+                    }
+                }
+            } catch (Throwable ignored) { }
+        }).start();
+    }
+
+    private void applyWeather(String temp, String desc, int code) {
+        String icon = "☀️";
+        int tint = 0x22D97706; // warm amber default
+        String lower = desc.toLowerCase(Locale.ROOT);
+        boolean isNight = false;
+        int hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY);
+        if (hour < 6 || hour >= 19) isNight = true;
+
+        if (lower.contains("thunder") || lower.contains("storm")) {
+            icon = "⛈️";
+            tint = 0x30312E81;
+        } else if (lower.contains("rain") || lower.contains("drizzle") || lower.contains("shower")) {
+            icon = "🌧️";
+            tint = 0x281E3A8A;
+        } else if (lower.contains("snow") || lower.contains("ice") || lower.contains("blizzard")) {
+            icon = "❄️";
+            tint = 0x240284C7;
+        } else if (lower.contains("fog") || lower.contains("mist") || lower.contains("haze") || lower.contains("smoke")) {
+            icon = "🌫️";
+            tint = 0x2278350F;
+        } else if (lower.contains("cloud") || lower.contains("overcast")) {
+            icon = lower.contains("partly") ? "⛅" : "☁️";
+            tint = 0x1E475569;
+        } else {
+            icon = isNight ? "🌙" : "☀️";
+            tint = isNight ? 0x2A1E1B4B : 0x22F59E0B;
+        }
+
+        if (weatherPill != null) {
+            weatherPill.setText(icon + "  " + temp + "°C  " + desc.toUpperCase(Locale.getDefault()));
+        }
+
+        if (weatherTint != null && currentWeatherTint != tint) {
+            ValueAnimator anim = ValueAnimator.ofObject(new ArgbEvaluator(), currentWeatherTint, tint);
+            anim.setDuration(800);
+            anim.addUpdateListener(a -> weatherTint.setBackgroundColor((int) a.getAnimatedValue()));
+            anim.start();
+            currentWeatherTint = tint;
+        }
+    }
+
+    private void updateBluetooth() {
+        if (btPill == null) return;
+        try {
+            BluetoothAdapter bt = BluetoothAdapter.getDefaultAdapter();
+            if (bt != null && bt.isEnabled()) {
+                String connectedAudio = null;
+                Set<BluetoothDevice> paired = bt.getBondedDevices();
+                if (paired != null) {
+                    for (BluetoothDevice d : paired) {
+                        BluetoothClass bc = d.getBluetoothClass();
+                        if (bc != null && (bc.getMajorDeviceClass() == BluetoothClass.Device.Major.AUDIO_VIDEO)) {
+                            connectedAudio = d.getName();
+                            break;
+                        }
+                    }
+                }
+                if (connectedAudio != null) {
+                    btPill.setText("🎧  " + connectedAudio);
+                } else {
+                    btPill.setText("🎧  Bluetooth");
+                }
+            } else {
+                btPill.setText("🎧  BT Off");
+            }
+        } catch (Throwable ignored) {
+            btPill.setText("🎧  Bluetooth");
+        }
+    }
+
+    private void handleBluetoothClick() {
+        Intent i = new Intent(Settings.ACTION_BLUETOOTH_SETTINGS);
+        if (!launch(i)) {
+            launch(new Intent("android.settings.BLUETOOTH_SETTINGS"));
+        }
+    }
+
+    private void showSleepDialog(View anchor) {
+        LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        list.setPadding(dp(8), dp(8), dp(8), dp(8));
+        GradientDrawable bg = new GradientDrawable();
+        bg.setCornerRadius(dp(16));
+        bg.setColor(0xF02A2A2E);
+        bg.setStroke(dp(1), 0x26FFFFFF);
+        list.setBackground(bg);
+
+        PopupWindow pw = new PopupWindow(list, dp(240), -2, true);
+        List<TextView> rows = new ArrayList<>();
+
+        rows.add(inputRow("☾  Screen Off (Audio Only)", () -> {
+            if (blackoutView != null) {
+                blackoutView.setVisibility(View.VISIBLE);
+                blackoutView.requestFocus();
+            }
+        }));
+
+        rows.add(inputRow("⚡  Sleep TV (Standby)", this::sleepTv));
+
+        for (TextView r : rows) {
+            r.setOnClickListener(v -> { pw.dismiss(); ((Runnable) v.getTag()).run(); });
+            list.addView(r, new LinearLayout.LayoutParams(-1, dp(38)));
+        }
+        for (int i = 0; i < rows.size(); i++) {
+            TextView r = rows.get(i);
+            r.setNextFocusUpId(rows.get(Math.max(0, i - 1)).getId());
+            r.setNextFocusDownId(rows.get(Math.min(rows.size() - 1, i + 1)).getId());
+            r.setNextFocusLeftId(r.getId());
+            r.setNextFocusRightId(r.getId());
+        }
+        pw.setOutsideTouchable(true);
+        pw.setElevation(dp(16));
+        pw.setOnDismissListener(() -> { sleepPopup = null; anchor.requestFocus(); });
+        sleepPopup = pw;
+        pw.showAsDropDown(anchor, 0, dp(8), Gravity.START);
+        rows.get(0).requestFocus();
+    }
+
+    private void sleepTv() {
+        new Thread(() -> {
+            try {
+                Runtime.getRuntime().exec("input keyevent KEYCODE_SLEEP");
+            } catch (Exception ignored) { }
+        }).start();
     }
 
     /** 16:9 container. */
