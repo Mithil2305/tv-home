@@ -22,7 +22,7 @@ if ($JavaHome) {
 $AndroidSdk = if ($env:ANDROID_HOME -and (Test-Path $env:ANDROID_HOME)) {
     $env:ANDROID_HOME
 } else {
-    "C:\Users\Mithilesh\AppData\Local\Android\Sdk"
+    "C:\Users\{username}\AppData\Local\Android\Sdk"
 }
 
 $BT = Get-ChildItem "$AndroidSdk\build-tools" | Sort-Object Name -Descending | Select-Object -First 1 -ExpandProperty FullName
