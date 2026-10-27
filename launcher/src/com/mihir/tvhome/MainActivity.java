@@ -16,7 +16,14 @@ import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Outline;
+import android.graphics.LinearGradient;
+import android.graphics.Paint;
+import android.graphics.Path;
+import android.graphics.RadialGradient;
+import android.graphics.RectF;
+import android.graphics.Shader;
 import android.graphics.Typeface;
+import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.media.tv.TvContract;
@@ -361,7 +368,25 @@ public class MainActivity extends Activity {
         }
 
         List<App> dock = new ArrayList<>();
-        for (String p : dockApps) if (byPkg.containsKey(p)) dock.add(byPkg.remove(p));
+        boolean hdmiAdded = false;
+        for (String p : dockApps) {
+            if ("input.hdmi".equals(p) || "hdmi".equalsIgnoreCase(p)) {
+                if (!hdmiAdded) {
+                    dock.add(buildHdmiApp());
+                    hdmiAdded = true;
+                }
+            } else if ("com.google.android.youtube.tv".equals(p) && !hdmiAdded) {
+                // Ensure HDMI button is placed directly on the left of YouTube
+                dock.add(buildHdmiApp());
+                hdmiAdded = true;
+                if (byPkg.containsKey(p)) dock.add(byPkg.remove(p));
+            } else if (byPkg.containsKey(p)) {
+                dock.add(byPkg.remove(p));
+            }
+        }
+        if (!hdmiAdded) {
+            dock.add(0, buildHdmiApp());
+        }
         List<App> rest = new ArrayList<>(byPkg.values());
         Collections.sort(rest, (x, y) -> x.label.compareToIgnoreCase(y.label));
 
@@ -458,10 +483,16 @@ public class MainActivity extends Activity {
         label.setAlpha(0f);
         if (!inDock) box.addView(label, llp(-1, -2, 0, dp(10), 0, 0));
 
-        card.setOnClickListener(v -> launch(new Intent(Intent.ACTION_MAIN)
-                .addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER)
-                .setComponent(app.component)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)));
+        card.setOnClickListener(v -> {
+            if ("input.hdmi".equals(app.pkg)) {
+                launchConnectedHdmi(card);
+            } else {
+                launch(new Intent(Intent.ACTION_MAIN)
+                        .addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER)
+                        .setComponent(app.component)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED));
+            }
+        });
         card.setOnFocusChangeListener((v, has) -> {
             float s = has ? (inDock ? 1.12f : 1.1f) : 1f;
             v.animate().scaleX(s).scaleY(s).translationZ(has ? dp(14) : 0)
@@ -472,7 +503,13 @@ public class MainActivity extends Activity {
             if (!has) return;
             lastFocusedId = v.getId();
             if (inDock) {
-                title.setText(app.label);
+                if ("input.hdmi".equals(app.pkg)) {
+                    TvInputInfo hdmi = getConnectedHdmiInput();
+                    String hdmiName = hdmi != null ? inputLabel(hdmi) : "HDMI";
+                    title.setText(hdmiName);
+                } else {
+                    title.setText(app.label);
+                }
                 title.animate().alpha(1f).setDuration(200).start();
                 animateGlow(app.color);
                 fadeGlow(1f);
@@ -607,6 +644,148 @@ public class MainActivity extends Activity {
             r.setTextColor(has ? 0xFF111111 : Color.WHITE);
         });
         return r;
+    }
+
+    private TvInputInfo getConnectedHdmiInput() {
+        TvInputManager tim = (TvInputManager) getSystemService(TV_INPUT_SERVICE);
+        if (tim == null) return null;
+        TvInputInfo firstHdmi = null;
+        for (TvInputInfo t : tim.getTvInputList()) {
+            if (!t.isPassthroughInput() || t.isHidden(this)) continue;
+            boolean isHdmi = false;
+            try {
+                if (t.getType() == TvInputInfo.TYPE_HDMI) isHdmi = true;
+            } catch (Throwable ignored) { }
+            if (!isHdmi && t.getId() != null && t.getId().toLowerCase(Locale.ROOT).contains("hdmi")) {
+                isHdmi = true;
+            }
+            if (isHdmi) {
+                if (firstHdmi == null) firstHdmi = t;
+                try {
+                    int state = tim.getInputState(t.getId());
+                    if (state == TvInputManager.INPUT_STATE_CONNECTED) {
+                        return t;
+                    }
+                } catch (Throwable ignored) { }
+            }
+        }
+        return firstHdmi;
+    }
+
+    private void launchConnectedHdmi(View anchor) {
+        TvInputInfo hdmi = getConnectedHdmiInput();
+        if (hdmi != null) {
+            Intent i = new Intent(Intent.ACTION_VIEW, TvContract.buildChannelUriForPassthroughInput(hdmi.getId()));
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            if (!launch(i)) {
+                if (inputPickerPkg != null && isInstalled(inputPickerPkg)) openPackage(inputPickerPkg);
+                else showInputs(anchor);
+            }
+        } else {
+            showInputs(anchor);
+        }
+    }
+
+    private App buildHdmiApp() {
+        App a = new App();
+        a.pkg = "input.hdmi";
+        TvInputInfo connected = getConnectedHdmiInput();
+        String name = connected != null ? inputLabel(connected) : "HDMI";
+        a.label = name;
+        a.isBanner = true;
+        a.color = 0xFF2563EB; // Electric blue glow
+        a.art = createHdmiBannerDrawable(name);
+        return a;
+    }
+
+    private Drawable createHdmiBannerDrawable(String portName) {
+        int w = 640, h = 360;
+        Bitmap bm = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+        Canvas c = new Canvas(bm);
+
+        // Background gradient: sleek dark navy/slate
+        Paint bgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        bgPaint.setShader(new LinearGradient(
+                0, 0, w, h,
+                new int[]{0xFF1E293B, 0xFF0F172A, 0xFF080D1A},
+                new float[]{0f, 0.6f, 1f},
+                Shader.TileMode.CLAMP));
+        c.drawRect(0, 0, w, h, bgPaint);
+
+        // Subtle radial highlight in the center
+        Paint radialPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        radialPaint.setShader(new RadialGradient(
+                w * 0.5f, h * 0.45f, w * 0.45f,
+                new int[]{0x3338BDF8, 0x152563EB, Color.TRANSPARENT},
+                new float[]{0f, 0.5f, 1f},
+                Shader.TileMode.CLAMP));
+        c.drawRect(0, 0, w, h, radialPaint);
+
+        // Subtle rounded border inset
+        Paint strokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        strokePaint.setStyle(Paint.Style.STROKE);
+        strokePaint.setStrokeWidth(3f);
+        strokePaint.setColor(0x26FFFFFF);
+        c.drawRoundRect(new RectF(6, 6, w - 6, h - 6), 24, 24, strokePaint);
+
+        // HDMI connector icon on the left
+        float iconCenterX = w * 0.28f;
+        float iconCenterY = h * 0.5f;
+
+        Paint iconPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        iconPaint.setColor(Color.WHITE);
+        iconPaint.setStyle(Paint.Style.STROKE);
+        iconPaint.setStrokeWidth(5f);
+        iconPaint.setStrokeCap(Paint.Cap.ROUND);
+        iconPaint.setStrokeJoin(Paint.Join.ROUND);
+
+        Path plug = new Path();
+        float pw = 70f, ph = 46f;
+        float notchW = 16f, notchH = 14f;
+        float l = iconCenterX - pw / 2;
+        float t = iconCenterY - ph / 2;
+        float r = iconCenterX + pw / 2;
+        float b = iconCenterY + ph / 2;
+
+        plug.moveTo(l, t);
+        plug.lineTo(r, t);
+        plug.lineTo(r, b - notchH);
+        plug.lineTo(r - notchW, b);
+        plug.lineTo(l + notchW, b);
+        plug.lineTo(l, b - notchH);
+        plug.close();
+
+        Paint plugFill = new Paint(Paint.ANTI_ALIAS_FLAG);
+        plugFill.setColor(0x2638BDF8);
+        c.drawPath(plug, plugFill);
+        c.drawPath(plug, iconPaint);
+
+        Paint pinPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        pinPaint.setColor(0xFF38BDF8);
+        pinPaint.setStyle(Paint.Style.FILL);
+        c.drawRoundRect(new RectF(iconCenterX - 20f, iconCenterY - 10f, iconCenterX + 20f, iconCenterY + 8f), 4, 4, pinPaint);
+
+        // Text: "HDMI 1" or "HDMI"
+        Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        textPaint.setColor(Color.WHITE);
+        textPaint.setTextSize(58f);
+        textPaint.setTypeface(Typeface.create("sans-serif-black", Typeface.BOLD));
+        textPaint.setTextAlign(Paint.Align.LEFT);
+
+        String mainText = portName != null && !portName.isEmpty() ? portName.toUpperCase(Locale.ROOT) : "HDMI";
+        float textX = w * 0.42f;
+        float textY = h * 0.52f;
+        c.drawText(mainText, textX, textY, textPaint);
+
+        // Subtitle badge: "CONNECTED INPUT"
+        Paint subPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        subPaint.setColor(0xCC38BDF8);
+        subPaint.setTextSize(18f);
+        subPaint.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        subPaint.setLetterSpacing(0.2f);
+        c.drawText("CONNECTED INPUT", textX, textY + 32f, subPaint);
+
+        return new BitmapDrawable(getResources(), bm);
     }
 
     // ---------------------------------------------------------------- status

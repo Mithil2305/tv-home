@@ -6,11 +6,13 @@
 <resources>
     <!-- Dock apps, left to right. Apps that aren't installed are skipped. -->
     <string-array name="dock_apps">
+        <item>input.hdmi</item>
         <item>com.apple.atve.androidtv.appletv</item>
         <item>com.google.android.youtube.tv</item>
         <item>in.startv.hotstar</item>
         <item>com.netflix.ninja</item>
         <item>com.amazon.amazonvideo.livingroom</item>
+        <item>org.videolan.vlc</item>
     </string-array>
 
     <!-- Never shown as tiles: system helpers, and the Live TV app (it's in the Inputs menu). -->
